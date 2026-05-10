@@ -1,0 +1,51 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: banking-outbox
+  labels:
+    {{- include "banking.labels" . | nindent 4 }}
+    component: outbox
+spec:
+  replicas: {{ .Values.outbox.replicas }}
+  selector:
+    matchLabels:
+      app: banking-outbox
+  template:
+    metadata:
+      labels:
+        app: banking-outbox
+        component: outbox
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "{{ .Values.outbox.metricsPort }}"
+        prometheus.io/path: "/metrics"
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+      containers:
+        - name: outbox
+          image: {{ include "banking.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["node", "dist/workers/outbox.dispatcher.js"]
+          ports:
+            - containerPort: {{ .Values.outbox.metricsPort }}
+              name: metrics
+          envFrom:
+            - configMapRef:
+                name: banking-config
+            - secretRef:
+                name: banking-secret
+          livenessProbe:
+            httpGet: { path: /health, port: {{ .Values.outbox.metricsPort }} }
+            initialDelaySeconds: 15
+            periodSeconds: 15
+          readinessProbe:
+            httpGet: { path: /health, port: {{ .Values.outbox.metricsPort }} }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.outbox.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }

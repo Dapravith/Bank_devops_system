@@ -1,0 +1,43 @@
+# Production overlay — managed dependencies, JWT enabled, OTEL on.
+# IMPORTANT: in real production, override `secrets.*` via External Secrets / Vault, not Git.
+postgres:
+  enabled: false       # use managed Postgres (RDS / Cloud SQL)
+redis:
+  enabled: false       # use managed Redis (ElastiCache / Memorystore)
+pgbouncer:
+  enabled: true        # PgBouncer in front of the managed DB
+
+api:
+  replicas: 3
+  hpa:
+    minReplicas: 3
+    maxReplicas: 12
+
+worker:
+  replicas: 2
+
+outbox:
+  replicas: 2          # at least 2 for HA; SKIP LOCKED keeps them safe
+
+config:
+  nodeEnv: production
+  logLevel: info
+  jwtAuthEnabled: "true"
+  otelEnabled: "true"
+
+ingress:
+  host: banking.example.com
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: 1m
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  tls:
+    - secretName: banking-api-tls
+      hosts:
+        - banking.example.com
+
+# Secrets MUST be sourced from a real secret manager. Do not commit real values.
+secrets:
+  databaseUrl: "REPLACE_AT_DEPLOY_TIME"
+  redisUrl: "REPLACE_AT_DEPLOY_TIME"
+  partnerJwtSecret: "REPLACE_AT_DEPLOY_TIME"
+  adminApiKey: "REPLACE_AT_DEPLOY_TIME"

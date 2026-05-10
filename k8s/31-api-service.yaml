@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: banking-api
+  namespace: banking-devops-platform
+  labels:
+    app: banking-api
+spec:
+  type: ClusterIP
+  selector:
+    app: banking-api
+  ports:
+    - name: http
+      port: 80
+      targetPort: 3000

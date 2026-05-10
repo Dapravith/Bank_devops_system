@@ -1,0 +1,99 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum ProcessingStatus {
+  PENDING
+  PROCESSING
+  SUCCESS
+  FAILED
+  RETRY
+}
+
+enum OutboxStatus {
+  PENDING
+  DISPATCHED
+  FAILED
+}
+
+enum DlqStatus {
+  OPEN
+  REQUEUED
+  DISMISSED
+}
+
+model Transaction {
+  id                Int               @id @default(autoincrement())
+  transaction_id    String            @unique
+  account_id        String
+  amount            Decimal           @db.Decimal(18, 2)
+  currency          String            @db.VarChar(3)
+  status            String            @db.VarChar(32)
+  description       String?
+  processing_status ProcessingStatus  @default(PENDING)
+  partner_response  Json?
+  error_message     String?
+  created_at        DateTime          @default(now())
+  updated_at        DateTime          @updatedAt
+
+  job_logs          JobLog[]
+
+  @@index([account_id])
+  @@index([processing_status])
+  @@index([created_at])
+}
+
+model JobLog {
+  id              Int       @id @default(autoincrement())
+  transaction_id  String
+  job_id          String
+  attempt         Int
+  status          String    @db.VarChar(32)
+  message         String?
+  created_at      DateTime  @default(now())
+
+  transaction     Transaction @relation(fields: [transaction_id], references: [transaction_id], onDelete: Cascade)
+
+  @@index([transaction_id])
+  @@index([job_id])
+  @@index([created_at])
+}
+
+// Outbox pattern: events written in the same DB transaction as the
+// Transaction row. A separate dispatcher polls and enqueues to BullMQ.
+model OutboxEvent {
+  id              Int           @id @default(autoincrement())
+  aggregate_type  String        @db.VarChar(64)   // e.g. "transaction"
+  aggregate_id    String        @db.VarChar(64)   // transaction_id
+  event_type      String        @db.VarChar(64)   // e.g. "transaction.notify"
+  payload         Json
+  status          OutboxStatus  @default(PENDING)
+  attempts        Int           @default(0)
+  last_error      String?
+  created_at      DateTime      @default(now())
+  dispatched_at   DateTime?
+
+  @@index([status, created_at])
+  @@index([aggregate_id])
+}
+
+// Dead-letter queue records: written by the worker when retries exhaust.
+// Surfaced via /api/v1/admin/dlq for inspection and manual requeue.
+model DlqEntry {
+  id              Int        @id @default(autoincrement())
+  transaction_id  String
+  reason          String
+  attempts        Int
+  payload         Json
+  status          DlqStatus  @default(OPEN)
+  created_at      DateTime   @default(now())
+  updated_at      DateTime   @updatedAt
+
+  @@index([status, created_at])
+  @@index([transaction_id])
+}

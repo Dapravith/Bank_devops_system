@@ -1,0 +1,70 @@
+# ArgoCD Application — declares the cluster's desired state from this Git repo.
+#
+# Prerequisites:
+#   1. ArgoCD installed in the `argocd` namespace.
+#   2. Replace `repoURL` with your fork's HTTPS URL.
+#   3. Optionally update `targetRevision` (branch / tag / commit).
+#
+# Apply with:
+#   kubectl apply -n argocd -f argocd/application.yaml
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: banking-devops-platform
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    # Replace with your fork URL.
+    repoURL: https://github.com/your-org/banking-devops-platform.git
+    targetRevision: main
+    path: helm/banking-devops-platform
+    helm:
+      releaseName: banking-devops-platform
+      valueFiles:
+        - values.yaml
+        - values-prod.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: banking-devops-platform
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+      allowEmpty: false
+    syncOptions:
+      - CreateNamespace=true
+      - PrunePropagationPolicy=foreground
+      - PruneLast=true
+      - ApplyOutOfSyncOnly=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 5m
+  revisionHistoryLimit: 10
+---
+# AppProject (optional) — restricts what this app can sync.
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: banking-devops
+  namespace: argocd
+spec:
+  description: Banking DevOps Platform project
+  sourceRepos:
+    - https://github.com/your-org/banking-devops-platform.git
+  destinations:
+    - namespace: banking-devops-platform
+      server: https://kubernetes.default.svc
+  clusterResourceWhitelist:
+    - group: ""
+      kind: Namespace
+  namespaceResourceBlacklist:
+    - group: ""
+      kind: ResourceQuota
+    - group: ""
+      kind: LimitRange

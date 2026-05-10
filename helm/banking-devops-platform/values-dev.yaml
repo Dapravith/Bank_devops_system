@@ -1,0 +1,20 @@
+# Dev overlay — smaller resources, looser settings, no canary.
+api:
+  replicas: 1
+  hpa:
+    enabled: false
+worker:
+  replicas: 1
+outbox:
+  replicas: 1
+postgres:
+  storage: 256Mi
+pgbouncer:
+  enabled: false
+config:
+  nodeEnv: development
+  logLevel: debug
+  jwtAuthEnabled: "false"
+  otelEnabled: "false"
+ingress:
+  host: banking.dev.local

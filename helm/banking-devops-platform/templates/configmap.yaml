@@ -1,0 +1,27 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: banking-config
+  labels: {{- include "banking.labels" . | nindent 4 }}
+data:
+  NODE_ENV: {{ .Values.config.nodeEnv | quote }}
+  PORT: "3000"
+  LOG_LEVEL: {{ .Values.config.logLevel | quote }}
+  CORS_ORIGINS: {{ .Values.config.corsOrigins | quote }}
+  RATE_LIMIT_WINDOW_MS: {{ .Values.config.rateLimitWindowMs | quote }}
+  RATE_LIMIT_MAX: {{ .Values.config.rateLimitMax | quote }}
+  QUEUE_NAME: {{ .Values.config.queueName | quote }}
+  DLQ_NAME: {{ .Values.config.dlqName | quote }}
+  JOB_ATTEMPTS: {{ .Values.config.jobAttempts | quote }}
+  JOB_BACKOFF_DELAY_MS: {{ .Values.config.jobBackoffDelayMs | quote }}
+  PARTNER_API_FAILURE_RATE: {{ .Values.config.partnerApiFailureRate | quote }}
+  PARTNER_API_MIN_LATENCY_MS: {{ .Values.config.partnerApiMinLatencyMs | quote }}
+  PARTNER_API_MAX_LATENCY_MS: {{ .Values.config.partnerApiMaxLatencyMs | quote }}
+  JWT_AUTH_ENABLED: {{ .Values.config.jwtAuthEnabled | quote }}
+  PARTNER_JWT_ISSUER: {{ .Values.config.partnerJwtIssuer | quote }}
+  PARTNER_JWT_AUDIENCE: {{ .Values.config.partnerJwtAudience | quote }}
+  OUTBOX_POLL_INTERVAL_MS: {{ .Values.outbox.pollIntervalMs | quote }}
+  OUTBOX_BATCH_SIZE: {{ .Values.outbox.batchSize | quote }}
+  OTEL_ENABLED: {{ .Values.config.otelEnabled | quote }}
+  OTEL_SERVICE_NAME: "banking-devops-platform"
+  OTEL_EXPORTER_OTLP_ENDPOINT: {{ .Values.config.otelExporterEndpoint | quote }}

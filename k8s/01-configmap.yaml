@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: banking-config
+  namespace: banking-devops-platform
+data:
+  NODE_ENV: "production"
+  PORT: "3000"
+  LOG_LEVEL: "info"
+  # In production set this to the specific Web origin, e.g. https://ops.banking.example.com
+  CORS_ORIGINS: "*"
+  RATE_LIMIT_WINDOW_MS: "60000"
+  RATE_LIMIT_MAX: "100"
+  QUEUE_NAME: "transaction-notification-queue"
+  DLQ_NAME: "transaction-notification-dlq"
+  JOB_ATTEMPTS: "3"
+  JOB_BACKOFF_DELAY_MS: "5000"
+  PARTNER_API_FAILURE_RATE: "0.2"
+  PARTNER_API_MIN_LATENCY_MS: "200"
+  PARTNER_API_MAX_LATENCY_MS: "1500"
+  OUTBOX_POLL_INTERVAL_MS: "1000"
+  OUTBOX_BATCH_SIZE: "100"

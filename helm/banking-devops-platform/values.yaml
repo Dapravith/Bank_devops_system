@@ -1,0 +1,113 @@
+# Default values — see values-dev.yaml / values-prod.yaml for env-specific overrides.
+nameOverride: ""
+fullnameOverride: ""
+
+image:
+  repository: banking-devops-platform
+  tag: latest
+  pullPolicy: IfNotPresent
+
+# API configuration
+api:
+  replicas: 2
+  port: 3000
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  hpa:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPUUtilization: 70
+    targetMemoryUtilization: 80
+
+# Worker configuration
+worker:
+  replicas: 1
+  metricsPort: 3001
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+# Outbox dispatcher
+outbox:
+  replicas: 1
+  metricsPort: 3002
+  pollIntervalMs: 1000
+  batchSize: 100
+  resources:
+    requests:
+      cpu: 50m
+      memory: 96Mi
+    limits:
+      cpu: 300m
+      memory: 256Mi
+
+# In-cluster Postgres / Redis (demo only)
+postgres:
+  enabled: true
+  image: postgres:16-alpine
+  user: banking
+  password: banking
+  database: banking
+  storage: 1Gi
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits:   { cpu: 500m, memory: 512Mi }
+
+pgbouncer:
+  enabled: true
+  poolMode: transaction
+  maxClientConn: 200
+  defaultPoolSize: 20
+
+redis:
+  enabled: true
+  image: redis:7-alpine
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits:   { cpu: 250m, memory: 256Mi }
+
+# Ingress
+ingress:
+  enabled: true
+  className: nginx
+  host: banking.local
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: 1m
+  tls: []
+
+# Application config
+config:
+  nodeEnv: production
+  logLevel: info
+  corsOrigins: "*"
+  rateLimitWindowMs: 60000
+  rateLimitMax: 100
+  queueName: transaction-notification-queue
+  dlqName: transaction-notification-dlq
+  jobAttempts: 3
+  jobBackoffDelayMs: 5000
+  partnerApiFailureRate: "0.2"
+  partnerApiMinLatencyMs: 200
+  partnerApiMaxLatencyMs: 1500
+  jwtAuthEnabled: "false"
+  partnerJwtIssuer: banking-partner
+  partnerJwtAudience: banking-devops-platform
+  otelEnabled: "false"
+  otelExporterEndpoint: http://otel-collector.monitoring.svc.cluster.local:4318
+
+# Sensitive: replace with secret references in production.
+secrets:
+  databaseUrl: "postgresql://banking:banking@pgbouncer:5432/banking?schema=public"
+  redisUrl: "redis://redis:6379"
+  partnerJwtSecret: "change-me-in-production"
+  adminApiKey: "change-me-admin-key"

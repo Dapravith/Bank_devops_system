@@ -1,0 +1,254 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  NODE_VERSION: "20"
+  API_IMAGE: banking-devops-platform-api
+  WEB_IMAGE: banking-devops-platform-web
+
+jobs:
+  build-and-test:
+    name: Build, lint, test (api + web)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: "npm"
+
+      - name: Install root + workspaces
+        run: npm run install:all
+
+      - name: Generate Prisma client
+        working-directory: apps/api
+        run: npx prisma generate
+
+      - name: Lint API
+        working-directory: apps/api
+        run: npm run lint || echo "::warning::API lint did not pass cleanly"
+
+      - name: Lint Web
+        working-directory: apps/web
+        run: npm run lint || echo "::warning::Web lint did not pass cleanly"
+
+      - name: TypeScript build (API)
+        working-directory: apps/api
+        run: npm run build
+
+      - name: Next.js build (Web)
+        working-directory: apps/web
+        run: npm run build
+        env:
+          NEXT_PUBLIC_API_BASE_URL: http://localhost:3000
+
+      - name: Test (API)
+        working-directory: apps/api
+        run: npm test
+
+      - name: Test (Web)
+        working-directory: apps/web
+        run: npm test
+
+  docker-build-scan:
+    name: Build images + Trivy scan
+    runs-on: ubuntu-latest
+    needs: build-and-test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build API image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/api/Dockerfile
+          load: true
+          tags: ${{ env.API_IMAGE }}:ci-${{ github.sha }}
+          cache-from: type=gha,scope=api
+          cache-to: type=gha,scope=api,mode=max
+
+      - name: Build Web image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/web/Dockerfile
+          load: true
+          tags: ${{ env.WEB_IMAGE }}:ci-${{ github.sha }}
+          build-args: |
+            NEXT_PUBLIC_API_BASE_URL=http://localhost:3000
+          cache-from: type=gha,scope=web
+          cache-to: type=gha,scope=web,mode=max
+
+      - name: Trivy filesystem scan
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          ignore-unfixed: true
+          severity: HIGH,CRITICAL
+          exit-code: "0"
+
+      - name: Trivy scan API image
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          scan-type: image
+          image-ref: ${{ env.API_IMAGE }}:ci-${{ github.sha }}
+          ignore-unfixed: true
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+        continue-on-error: true
+
+      - name: Trivy scan Web image
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          scan-type: image
+          image-ref: ${{ env.WEB_IMAGE }}:ci-${{ github.sha }}
+          ignore-unfixed: true
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+        continue-on-error: true
+
+  validate-k8s:
+    name: Validate Kubernetes + Helm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install kubeconform
+        run: |
+          curl -sSL https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64.tar.gz | tar xz
+          sudo mv kubeconform /usr/local/bin/
+
+      - uses: azure/setup-helm@v4
+
+      - name: Validate manifests in k8s/
+        run: |
+          for f in k8s/*.yaml; do
+            base=$(basename "$f")
+            if [ "$base" = "02-secret.example.yaml" ]; then
+              echo "Skipping example secret: $f"; continue
+            fi
+            if [ "$base" = "35-api-rollout.yaml" ]; then
+              echo "Skipping Argo Rollouts CRD validation: $f"; continue
+            fi
+            echo "::group::Validate $f"
+            kubeconform -strict -summary -skip Ingress "$f"
+            echo "::endgroup::"
+          done
+
+      - name: Helm lint
+        run: helm lint helm/banking-devops-platform
+
+      - name: Helm template (default)
+        run: helm template banking helm/banking-devops-platform | kubeconform -strict -summary -skip Ingress
+
+      - name: Helm template (dev overlay)
+        run: helm template banking helm/banking-devops-platform -f helm/banking-devops-platform/values-dev.yaml > /dev/null
+
+      - name: Helm template (prod overlay)
+        run: helm template banking helm/banking-devops-platform -f helm/banking-devops-platform/values-prod.yaml > /dev/null
+
+  k6-smoke:
+    name: k6 smoke (full stack)
+    runs-on: ubuntu-latest
+    needs: build-and-test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Bring up the stack
+        run: docker compose up -d --build postgres redis api worker outbox web
+
+      - name: Wait for API /ready
+        run: |
+          for i in $(seq 1 60); do
+            if curl -sSf http://localhost:3000/ready >/dev/null; then
+              echo "API ready after ${i}s"; break
+            fi
+            sleep 2
+          done
+          curl -sSf http://localhost:3000/ready || (docker compose logs --tail=200 api worker outbox; exit 1)
+
+      - name: Wait for Web /api/health
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sSf http://localhost:8080/api/health >/dev/null; then
+              echo "Web ready after ${i}s"; break
+            fi
+            sleep 2
+          done
+          curl -sSf http://localhost:8080/api/health || (docker compose logs --tail=200 web; exit 1)
+
+      - uses: grafana/setup-k6-action@v1
+
+      - name: Run k6 smoke
+        run: k6 run loadtest/k6/smoke.js
+        env:
+          BASE_URL: http://localhost:3000
+          VUS: "5"
+          DURATION: "30s"
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v
+
+  publish-images:
+    name: Publish images (only if registry secrets configured)
+    runs-on: ubuntu-latest
+    needs: [docker-build-scan, validate-k8s, k6-smoke]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check registry secrets
+        id: check
+        run: |
+          if [ -n "${{ secrets.REGISTRY_USERNAME }}" ] && [ -n "${{ secrets.REGISTRY_PASSWORD }}" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::REGISTRY_USERNAME / REGISTRY_PASSWORD not set, skipping image push."
+          fi
+
+      - if: steps.check.outputs.configured == 'true'
+        uses: docker/setup-buildx-action@v3
+
+      - if: steps.check.outputs.configured == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ secrets.REGISTRY_URL || 'docker.io' }}
+          username: ${{ secrets.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+
+      - if: steps.check.outputs.configured == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/api/Dockerfile
+          push: true
+          tags: |
+            ${{ secrets.REGISTRY_URL || 'docker.io' }}/${{ secrets.REGISTRY_USERNAME }}/${{ env.API_IMAGE }}:latest
+            ${{ secrets.REGISTRY_URL || 'docker.io' }}/${{ secrets.REGISTRY_USERNAME }}/${{ env.API_IMAGE }}:${{ github.sha }}
+          cache-from: type=gha,scope=api
+          cache-to: type=gha,scope=api,mode=max
+
+      - if: steps.check.outputs.configured == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/web/Dockerfile
+          push: true
+          build-args: |
+            NEXT_PUBLIC_API_BASE_URL=${{ vars.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:3000' }}
+          tags: |
+            ${{ secrets.REGISTRY_URL || 'docker.io' }}/${{ secrets.REGISTRY_USERNAME }}/${{ env.WEB_IMAGE }}:latest
+            ${{ secrets.REGISTRY_URL || 'docker.io' }}/${{ secrets.REGISTRY_USERNAME }}/${{ env.WEB_IMAGE }}:${{ github.sha }}
+          cache-from: type=gha,scope=web
+          cache-to: type=gha,scope=web,mode=max

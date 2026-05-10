@@ -1,0 +1,203 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: banking-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: banking
+      POSTGRES_PASSWORD: banking
+      POSTGRES_DB: banking
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U banking -d banking"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  pgbouncer:
+    image: edoburu/pgbouncer:1.23.1
+    container_name: banking-pgbouncer
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DB_USER: banking
+      DB_PASSWORD: banking
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: banking
+      POOL_MODE: transaction
+      MAX_CLIENT_CONN: "200"
+      DEFAULT_POOL_SIZE: "20"
+      AUTH_TYPE: scram-sha-256
+    ports:
+      - "6432:5432"
+    healthcheck:
+      test: ["CMD", "sh", "-c", "echo > /dev/tcp/127.0.0.1/5432"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: banking-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    image: banking-devops-platform-api:latest
+    container_name: banking-api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      LOG_LEVEL: info
+      CORS_ORIGINS: "*"
+      DATABASE_URL: postgresql://banking:banking@postgres:5432/banking?schema=public
+      REDIS_URL: redis://redis:6379
+      QUEUE_NAME: transaction-notification-queue
+      DLQ_NAME: transaction-notification-dlq
+      JOB_ATTEMPTS: 3
+      JOB_BACKOFF_DELAY_MS: 5000
+      PARTNER_API_FAILURE_RATE: "0.2"
+      PARTNER_API_MIN_LATENCY_MS: 200
+      PARTNER_API_MAX_LATENCY_MS: 1500
+      JWT_AUTH_ENABLED: "false"
+      PARTNER_JWT_SECRET: "change-me-in-production"
+      PARTNER_JWT_ISSUER: "banking-partner"
+      PARTNER_JWT_AUDIENCE: "banking-devops-platform"
+      ADMIN_API_KEY: "change-me-admin-key"
+      OTEL_ENABLED: "false"
+      OTEL_SERVICE_NAME: "banking-api"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"
+    ports:
+      - "3000:3000"
+    command: >
+      sh -c "npx prisma migrate deploy && node dist/server.js"
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  worker:
+    image: banking-devops-platform-api:latest
+    container_name: banking-worker
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_started
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      LOG_LEVEL: info
+      DATABASE_URL: postgresql://banking:banking@postgres:5432/banking?schema=public
+      REDIS_URL: redis://redis:6379
+      QUEUE_NAME: transaction-notification-queue
+      DLQ_NAME: transaction-notification-dlq
+      JOB_ATTEMPTS: 3
+      JOB_BACKOFF_DELAY_MS: 5000
+      PARTNER_API_FAILURE_RATE: "0.2"
+      PARTNER_API_MIN_LATENCY_MS: 200
+      PARTNER_API_MAX_LATENCY_MS: 1500
+      OTEL_ENABLED: "false"
+      OTEL_SERVICE_NAME: "banking-worker"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"
+    ports:
+      - "3001:3001"
+    command: ["node", "dist/workers/transaction.worker.js"]
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3001/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  outbox:
+    image: banking-devops-platform-api:latest
+    container_name: banking-outbox
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_started
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      LOG_LEVEL: info
+      DATABASE_URL: postgresql://banking:banking@postgres:5432/banking?schema=public
+      REDIS_URL: redis://redis:6379
+      QUEUE_NAME: transaction-notification-queue
+      OUTBOX_POLL_INTERVAL_MS: 1000
+      OUTBOX_BATCH_SIZE: 100
+      OTEL_ENABLED: "false"
+      OTEL_SERVICE_NAME: "banking-outbox"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"
+    ports:
+      - "3002:3002"
+    command: ["node", "dist/workers/outbox.dispatcher.js"]
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3002/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args:
+        # Browser fetches the API at this URL. localhost works because the
+        # API publishes :3000 on the host. Override for non-localhost demos.
+        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:3000}
+    image: banking-devops-platform-web:latest
+    container_name: banking-web
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_started
+    environment:
+      NODE_ENV: production
+      PORT: 8080
+      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:3000}
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:8080/api/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+volumes:
+  postgres_data:
+  redis_data:

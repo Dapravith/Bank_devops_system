@@ -1,0 +1,29 @@
+{
+  "name": "banking-devops-platform",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Full-stack banking transaction notification platform with operations dashboard.",
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "install:all": "npm install && npm install --workspace=apps/api && npm install --workspace=apps/web",
+    "dev:api": "npm run dev --workspace=apps/api",
+    "dev:web": "npm run dev --workspace=apps/web",
+    "worker": "npm run worker --workspace=apps/api",
+    "outbox": "npm run outbox --workspace=apps/api",
+    "build": "npm run build --workspace=apps/api && npm run build --workspace=apps/web",
+    "build:api": "npm run build --workspace=apps/api",
+    "build:web": "npm run build --workspace=apps/web",
+    "lint": "npm run lint --workspace=apps/api && npm run lint --workspace=apps/web",
+    "test": "npm run test --workspace=apps/api && npm run test --workspace=apps/web",
+    "prisma:generate": "npm run prisma:generate --workspace=apps/api",
+    "prisma:migrate": "npm run prisma:migrate --workspace=apps/api",
+    "prisma:migrate:dev": "npm run prisma:migrate:dev --workspace=apps/api",
+    "loadtest": "npm run loadtest --workspace=apps/api"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "license": "MIT"
+}
