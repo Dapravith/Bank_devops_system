@@ -29,3 +29,6 @@ apps/api/prisma/dev.db
 apps/api/prisma/dev.db-journal
 
 k8s/02-secret.yaml
+
+# Local CI secrets
+.secrets
